@@ -67,6 +67,34 @@ The project is currently in **Phase 1 (Minimum Viable Product)**, focusing on de
 
 ### Backend Service (`ai_orchestration`)
 
+#### Cloud Credentials for `terraform apply`
+
+**Important:** For the `terraform apply` functionality to work and provision resources in your target cloud environment (e.g., AWS), the environment where the `ai_orchestration` service runs (e.g., its Docker container or the local machine if running directly) **must be configured with valid cloud provider credentials.**
+
+*   **For AWS:**
+    *   The common way is to set the following environment variables:
+        *   `AWS_ACCESS_KEY_ID`
+        *   `AWS_SECRET_ACCESS_KEY`
+        *   `AWS_SESSION_TOKEN` (if using temporary credentials)
+        *   `AWS_DEFAULT_REGION` (e.g., `us-east-1`)
+    *   These credentials must have sufficient IAM permissions to create, modify, and delete the resources defined in the generated HCL (e.g., EC2 instances, Security Groups).
+    *   When running the Docker container for the backend, pass these environment variables using the `-e` flag. For example, if your `ANTHROPIC_API_KEY` is also an environment variable:
+        ```bash
+        docker run -d -p 8000:8000 \
+          -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+          -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+          -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+          -e AWS_DEFAULT_REGION="us-east-1" \
+          # Add -e AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN if needed
+          --name ai_orch_service ai-orchestration-service
+        ```
+    *   Refer to the official AWS documentation for details on configuring credentials for applications.
+
+*   **For other Cloud Providers (Azure, GCP, etc.):**
+    *   Similar mechanisms (typically environment variables or mounted configuration files/service account keys) are used. Consult the specific provider's documentation for Terraform authentication.
+
+Failure to provide valid credentials will result in errors when `terraform apply` is executed by the platform.
+
 1.  **API Key Setup:**
     *   The backend service requires an Anthropic API key. Export it as an environment variable:
         ```bash

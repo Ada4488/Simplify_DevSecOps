@@ -176,9 +176,9 @@ resource "aws_instance" "server_{project_name_tag}" {{
         hcl_string = f"# Cloud provider '{intent_data.cloud_provider}' not recognized."
     return IaCResponse(hcl_code=hcl_string, message=message)
 
-# --- HCL Validation Agent ---
+# --- HCL Validation and Apply Agent ---
 
-class HCLValidationRequest(BaseModel):
+class HCLContentRequest(BaseModel): # Generic request for HCL code
     hcl_code: str
 
 class TerraformCommandOutput(BaseModel):
@@ -193,6 +193,13 @@ class HCLValidationResponse(BaseModel):
     validate_output: Optional[TerraformCommandOutput] = None
     message: Optional[str] = None
 
+class HCLApplyResponse(BaseModel):
+    apply_successful: bool
+    init_output: Optional[TerraformCommandOutput] = None # Optional in case of early failure
+    apply_output: Optional[TerraformCommandOutput] = None # Optional in case init fails
+    message: Optional[str] = None
+
+
 def _run_terraform_command(command: List[str], working_dir: str) -> TerraformCommandOutput:
     try:
         process = subprocess.run(
@@ -200,7 +207,7 @@ def _run_terraform_command(command: List[str], working_dir: str) -> TerraformCom
             cwd=working_dir,
             capture_output=True,
             text=True,
-            check=False # Do not raise exception for non-zero exit codes automatically
+            check=False 
         )
         return TerraformCommandOutput(
             command=" ".join(command),
@@ -208,24 +215,23 @@ def _run_terraform_command(command: List[str], working_dir: str) -> TerraformCom
             stderr=process.stderr.strip(),
             exit_code=process.returncode
         )
-    except FileNotFoundError: # Handles case where terraform command itself is not found
+    except FileNotFoundError:
         return TerraformCommandOutput(
             command=" ".join(command),
             stdout="",
-            stderr=f"Error: Terraform command not found. Ensure Terraform is installed and in PATH. Command: {command[0]}",
-            exit_code=127 # Standard exit code for command not found
+            stderr=f"Error: Command '{command[0]}' not found. Ensure Terraform is installed and in PATH.",
+            exit_code=127
         )
-    except Exception as e: # Catch any other unexpected errors during subprocess execution
+    except Exception as e:
          return TerraformCommandOutput(
             command=" ".join(command),
             stdout="",
             stderr=f"An unexpected error occurred while running command: {str(e)}",
-            exit_code=1 # Generic error code
+            exit_code=1 
         )
 
-
 @app.post("/api/v1/infra-agent/validate-hcl", response_model=HCLValidationResponse)
-async def validate_hcl_code(request: HCLValidationRequest):
+def validate_hcl_code(request: HCLContentRequest): # Changed to use HCLContentRequest
     temp_dir = None
     try:
         temp_dir = tempfile.mkdtemp()
@@ -233,7 +239,6 @@ async def validate_hcl_code(request: HCLValidationRequest):
         with open(main_tf_path, "w") as f:
             f.write(request.hcl_code)
 
-        # Run terraform init
         init_command = ["terraform", "init", "-input=false", "-no-color"]
         init_output = _run_terraform_command(init_command, temp_dir)
 
@@ -244,10 +249,6 @@ async def validate_hcl_code(request: HCLValidationRequest):
                 message=f"Terraform init failed. Errors: {init_output.stderr}"
             )
 
-        # Run terraform validate (only if init succeeded)
-        # Using -json flag for validate. If successful, exit code is 0 and JSON contains valid:true
-        # If validation errors, exit code is 0 but JSON contains valid:false and diagnostics.
-        # If syntax errors prevent JSON output, exit code might be 1.
         validate_command = ["terraform", "validate", "-no-color", "-json"]
         validate_output = _run_terraform_command(validate_command, temp_dir)
         
@@ -256,46 +257,91 @@ async def validate_hcl_code(request: HCLValidationRequest):
 
         if validate_output.exit_code == 0:
             try:
-                # Try to parse JSON output from terraform validate -json
                 validate_json = json.loads(validate_output.stdout)
                 if validate_json.get("valid", False):
                     validation_passed = True
                     validation_message = "Terraform validation successful."
                 else:
-                    # valid:false, check for diagnostics
-                    diagnostics = validate_json.get("diagnostics", [])
                     error_count = validate_json.get("error_count", 0)
                     warning_count = validate_json.get("warning_count", 0)
                     if error_count > 0:
                          validation_message = f"Terraform validation failed with {error_count} errors."
-                         # stderr might also contain info, or diagnostics in stdout is primary
                     elif warning_count > 0:
                         validation_message = f"Terraform validation passed with {warning_count} warnings."
-                        validation_passed = True # Passed but with warnings
+                        validation_passed = True 
                     else:
-                        validation_message = "Terraform validation reported not valid, but no errors or warnings found in JSON."
-
-
+                        validation_message = "Validation reported not valid, but no errors/warnings in JSON."
             except json.JSONDecodeError:
-                # If stdout is not JSON, it means a more severe validation error occurred,
-                # or -json flag was not respected. Rely on stderr or assume failure.
-                validation_message = "Terraform validation output was not valid JSON. Check stderr for details."
-                # validation_passed remains False
-        else: # Exit code from validate was non-zero, implies failure
-            validation_message = f"Terraform validate command failed. Exit code: {validate_output.exit_code}. Errors: {validate_output.stderr}"
-            # validation_passed remains False
-
-
+                validation_message = "Validation output was not valid JSON. Check stderr."
+        else: 
+            validation_message = f"Validate command failed. Exit: {validate_output.exit_code}. Errors: {validate_output.stderr}"
+            
         return HCLValidationResponse(
             validation_passed=validation_passed,
             init_output=init_output,
             validate_output=validate_output,
             message=validation_message
         )
-
     except Exception as e:
-        # Catch-all for unexpected errors in the endpoint logic itself
         raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+    finally:
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+
+@app.post("/api/v1/infra-agent/apply-hcl", response_model=HCLApplyResponse)
+def apply_hcl_code(request: HCLContentRequest): # Changed to use HCLContentRequest
+    temp_dir = None
+    try:
+        temp_dir = tempfile.mkdtemp()
+        main_tf_path = os.path.join(temp_dir, "main.tf")
+        with open(main_tf_path, "w") as f:
+            f.write(request.hcl_code)
+
+        init_command = ["terraform", "init", "-input=false", "-no-color"]
+        init_output = _run_terraform_command(init_command, temp_dir)
+
+        if init_output.exit_code != 0:
+            # Create a placeholder for apply_output if init fails
+            placeholder_apply_output = TerraformCommandOutput(
+                command="terraform apply (not executed due to init failure)",
+                stdout="",
+                stderr="Init failed, apply not attempted.",
+                exit_code=-1 
+            )
+            return HCLApplyResponse(
+                apply_successful=False,
+                init_output=init_output,
+                apply_output=placeholder_apply_output,
+                message=f"Terraform init failed. Apply not attempted. Errors: {init_output.stderr}"
+            )
+
+        # Run terraform apply
+        apply_command = ["terraform", "apply", "-auto-approve", "-input=false", "-no-color"]
+        apply_output = _run_terraform_command(apply_command, temp_dir)
+
+        apply_successful = apply_output.exit_code == 0
+        message = f"Terraform apply {'completed successfully' if apply_successful else 'failed or had errors'}."
+        if not apply_successful and apply_output.stderr:
+            message += f" Errors: {apply_output.stderr}"
+        elif not apply_successful and apply_output.stdout: # Sometimes errors go to stdout for apply
+             message += f" Details: {apply_output.stdout}"
+
+
+        return HCLApplyResponse(
+            apply_successful=apply_successful,
+            init_output=init_output,
+            apply_output=apply_output,
+            message=message
+        )
+    except Exception as e:
+        # For unexpected errors in this endpoint's logic
+        # Log e for server-side details
+        # Create dummy/error outputs if they are not set due to early exception
+        dummy_init_output = TerraformCommandOutput(command="terraform init", stdout="", stderr=str(e), exit_code=-2)
+        dummy_apply_output = TerraformCommandOutput(command="terraform apply", stdout="", stderr=str(e), exit_code=-2)
+        # It's better to raise HTTPException for endpoint errors than returning a HCLApplyResponse with error state
+        # as the error is not from Terraform but from the service itself.
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred during HCL apply process: {str(e)}")
     finally:
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
