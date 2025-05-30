@@ -81,34 +81,83 @@ The user's request is:
 """
 
 Extract the following information and return it as a JSON object:
-- "application_type": (e.g., "python_flask_webapp", "nodejs_express_api", "static_website", "java_spring_service")
-- "programming_language": (e.g., "python", "javascript", "java", "go")
+- "application_type": (e.g., "python_flask_webapp", "nodejs_express_api", "static_website", "java_spring_service", "none" if just a resource request)
+- "programming_language": (e.g., "python", "javascript", "java", "go", "none")
 - "database_type": (e.g., "postgresql", "mysql", "mongodb", "none")
 - "cloud_provider": (e.g., "aws", "azure", "gcp")
+- "resource_type": (e.g., "ec2_instance", "storage_bucket", "kubernetes_cluster", "serverless_function")
+- "resource_name": (the desired name for the primary resource, e.g., bucket name, instance name)
+- "region": (the desired cloud region, e.g., "us-east-1", "East US", "europe-west1")
 - "required_security_scans": (list of strings, e.g., ["sast", "dast", "sca"])
 - "other_requirements": (any other specific user requests or details)
 
-Example:
-User Request: "Deploy a Node.js Express API with a MongoDB database on Azure. I need SAST and DAST."
+Examples:
+User Request: "Deploy a Node.js Express API with a MongoDB database on Azure in West US. I need SAST and DAST."
 Expected JSON Output:
 {
   "application_type": "nodejs_express_api",
   "programming_language": "javascript",
   "database_type": "mongodb",
   "cloud_provider": "azure",
+  "resource_type": "nodejs_express_api", 
+  "resource_name": "my-node-app", 
+  "region": "West US",
   "required_security_scans": ["sast", "dast"],
+  "other_requirements": "None"
+}
+
+User Request: "Create an AWS S3 bucket named my-photo-storage-bucket in us-east-1."
+Expected JSON Output:
+{
+  "application_type": "none",
+  "programming_language": "none",
+  "database_type": "none",
+  "cloud_provider": "aws",
+  "resource_type": "storage_bucket",
+  "resource_name": "my-photo-storage-bucket",
+  "region": "us-east-1",
+  "required_security_scans": [],
+  "other_requirements": "None"
+}
+
+User Request: "I need a new Azure blob storage container called 'my-azure-backup-data' in East US."
+Expected JSON Output:
+{
+  "application_type": "none",
+  "programming_language": "none",
+  "database_type": "none",
+  "cloud_provider": "azure",
+  "resource_type": "storage_bucket", 
+  "resource_name": "my-azure-backup-data",
+  "region": "East US",
+  "required_security_scans": [],
+  "other_requirements": "None"
+}
+
+User Request: "Make a Google Cloud Storage bucket. Call it 'gcp-project-artifacts'. Use us-central1."
+Expected JSON Output:
+{
+  "application_type": "none",
+  "programming_language": "none",
+  "database_type": "none",
+  "cloud_provider": "gcp",
+  "resource_type": "storage_bucket",
+  "resource_name": "gcp-project-artifacts",
+  "region": "us-central1",
+  "required_security_scans": [],
   "other_requirements": "None"
 }
 
 Now, parse the following user request:
 """
-I want to deploy a Python Flask web application. It needs a PostgreSQL database. Deploy it on AWS. Also, make sure to include SAST scanning in the pipeline.
+{{user_request}}
 """
 
 Return ONLY the JSON object.
 ```
 
-**Expected LLM Output (for the example):**
+**Expected LLM Output (for the example "I want to deploy a Python Flask web application..."):** 
+N.B. The original example output needs to be updated for the new fields.
 
 ```json
 {
@@ -116,6 +165,9 @@ Return ONLY the JSON object.
   "programming_language": "python",
   "database_type": "postgresql",
   "cloud_provider": "aws",
+  "resource_type": "python_flask_webapp", 
+  "resource_name": "my-python-app", 
+  "region": "us-east-1", // Assuming a default or to be asked
   "required_security_scans": ["sast"],
   "other_requirements": "None"
 }
@@ -185,12 +237,15 @@ The primary method for intent recognition and entity extraction will be through 
 
 3.  **Key Entities to Extract (MVP Focus):**
     *   **Core Application Details:**
-        *   `application_type`: (e.g., "python_flask_webapp", "nodejs_express_api", "static_website")
-        *   `programming_language`: (e.g., "python", "javascript", "java")
+        *   `application_type`: (e.g., "python_flask_webapp", "nodejs_express_api", "static_website", "java_spring_service", "none")
+        *   `programming_language`: (e.g., "python", "javascript", "java", "go", "none")
     *   **Data Services:**
         *   `database_type`: (e.g., "postgresql", "mysql", "mongodb", "none")
-    *   **Deployment Target:**
-        *   `cloud_provider`: (Primarily "aws" for MVP, but designed to recognize others like "azure", "gcp")
+    *   **Deployment Target & Resource Specifics:**
+        *   `cloud_provider`: (e.g., "aws", "azure", "gcp")
+        *   `resource_type`: (e.g., "ec2_instance", "storage_bucket", "application_deployment")
+        *   `resource_name`: (The user-specified or inferred name for the resource)
+        *   `region`: (The target cloud region, e.g., "us-east-1", "East US", "europe-west1")
     *   **Security Requirements:**
         *   `required_security_scans`: (List of scan types, e.g., ["sast", "dast", "sca"])
     *   **Other Specifics:**
@@ -225,5 +280,25 @@ The primary method for intent recognition and entity extraction will be through 
     }
     ```
 4.  **AI Orchestration Layer validates and uses this JSON** to trigger subsequent agents (Infrastructure Agent, Pipeline Agent).
+
+### Example Workflow (Storage Bucket):
+
+1.  **User Input:** "Can you make a Google Cloud Storage bucket for me? Name it 'my-unique-gcp-bucket' and put it in 'europe-west1'."
+2.  **AI Orchestration Layer sends to LLM with Entity Extraction Prompt.**
+3.  **LLM Returns JSON:**
+    ```json
+    {
+      "application_type": "none",
+      "programming_language": "none",
+      "database_type": "none",
+      "cloud_provider": "gcp",
+      "resource_type": "storage_bucket",
+      "resource_name": "my-unique-gcp-bucket",
+      "region": "europe-west1",
+      "required_security_scans": [],
+      "other_requirements": "None"
+    }
+    ```
+4.  **AI Orchestration Layer validates and uses this JSON** to trigger the Infrastructure Agent.
 
 This approach leverages the LLM's advanced language understanding capabilities to perform the initial, often challenging, step of converting unstructured user requests into actionable, structured data. The quality of this step directly impacts the effectiveness of all subsequent automation.

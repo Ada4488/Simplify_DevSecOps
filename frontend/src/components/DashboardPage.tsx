@@ -17,16 +17,17 @@ interface HCLValidationResult {
   message?: string;
 }
 
-interface HCLApplyResponse { // New interface for Apply result
+interface HCLApplyResponse { 
   apply_successful: boolean;
   init_output?: TerraformCommandOutput;
-  apply_output?: TerraformCommandOutput; // Changed from validate_output
+  apply_output?: TerraformCommandOutput; 
   message?: string;
 }
 
 const DashboardPage: React.FC = () => {
   const auth = useAuth(); 
   const [description, setDescription] = useState('');
+  const [region, setRegion] = useState(''); // New state for region input
   
   const [parsedIntentJson, setParsedIntentJson] = useState<string | null>(null);
   const [isLoadingIntent, setIsLoadingIntent] = useState<boolean>(false);
@@ -41,7 +42,6 @@ const DashboardPage: React.FC = () => {
   const [hclValidationResult, setHclValidationResult] = useState<HCLValidationResult | null>(null);
   const [hclValidationError, setHclValidationError] = useState<string | null>(null);
 
-  // New states for HCL Apply
   const [isApplyingHcl, setIsApplyingHcl] = useState<boolean>(false);
   const [hclApplyResult, setHclApplyResult] = useState<HCLApplyResponse | null>(null);
   const [hclApplyError, setHclApplyError] = useState<string | null>(null);
@@ -60,13 +60,32 @@ const DashboardPage: React.FC = () => {
     setIsValidatingHcl(false);
     setHclValidationResult(null);
     setHclValidationError(null);
-    setIsApplyingHcl(false); // Reset apply state
+    setIsApplyingHcl(false); 
     setHclApplyResult(null);
     setHclApplyError(null);
 
+    let queryToSend = description.trim();
+    if (region.trim() !== "") {
+      // Append region information naturally to the query
+      // Check if description already ends with a punctuation.
+      if (/[.,!?]$/.test(queryToSend)) {
+        queryToSend += ` Target region is ${region.trim()}.`;
+      } else if (queryToSend) { // Ensure queryToSend is not empty before adding a period.
+        queryToSend += `. Target region is ${region.trim()}.`;
+      } else { // If description is empty, just use region info (though LLM might struggle)
+        queryToSend = `Target region is ${region.trim()}.`;
+      }
+    }
+    if (!queryToSend) { // If both description and region are empty
+        setIntentError("Please provide a description for your application or resource.");
+        setIsLoadingIntent(false);
+        return;
+    }
+
+
     try {
       const intentResponse = await axios.post('http://localhost:8000/api/v1/orchestration/parse-intent', {
-        query: description,
+        query: queryToSend, // Use modified query
       });
       setParsedIntentJson(JSON.stringify(intentResponse.data, null, 2));
       setIsLoadingIntent(false);
@@ -150,8 +169,8 @@ const DashboardPage: React.FC = () => {
   };
 
   const mainButtonDisabled = isLoadingIntent || isGeneratingHcl || isValidatingHcl || isApplyingHcl;
-  const showValidateButton = generatedHcl && !hclError && !isValidatingHcl && !isApplyingHcl;
-  const showApplyButton = generatedHcl && hclValidationResult?.validation_passed && !isApplyingHcl && !isLoadingIntent && !isGeneratingHcl && !isValidatingHcl;
+  const showValidateButton = generatedHcl && !hclError && !isValidatingHcl && !isApplyingHcl && !mainButtonDisabled;
+  const showApplyButton = generatedHcl && hclValidationResult?.validation_passed && !isApplyingHcl && !mainButtonDisabled;
 
 
   const renderTerraformOutput = (tfOutput: TerraformCommandOutput | undefined, title: string) => {
@@ -176,16 +195,36 @@ const DashboardPage: React.FC = () => {
       
       <form onSubmit={handleSubmit}>
         <div>
+          <label htmlFor="descriptionInput" style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+            Describe your application, desired services, cloud environment, and any specific requirements:
+          </label>
           <textarea
+            id="descriptionInput"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="e.g., Deploy a Python Flask web app with a PostgreSQL database on AWS..."
+            placeholder="e.g., Deploy a Python Flask web app with a PostgreSQL database on AWS. Include SAST scanning in the pipeline."
             rows={8}
             style={{ width: '90%', maxWidth: '800px', minHeight: '100px', padding: '10px', marginBottom: '15px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '1rem' }}
             required
             disabled={mainButtonDisabled}
           />
         </div>
+
+        <div style={{ marginTop: '10px', marginBottom: '20px' }}>
+          <label htmlFor="regionInput" style={{ marginRight: '10px', fontWeight: 'bold' }}>
+            Optional: Specify Target Region/Location:
+          </label>
+          <input
+            id="regionInput"
+            type="text"
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            placeholder="e.g., us-west-2, North Europe, asia-southeast1"
+            style={{ width: '40%', minWidth: '250px', padding: '8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '1rem' }}
+            disabled={mainButtonDisabled}
+          />
+        </div>
+
         <div>
           <button 
             type="submit" 
