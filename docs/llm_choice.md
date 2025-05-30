@@ -88,6 +88,12 @@ Extract the following information and return it as a JSON object:
 - "resource_type": (e.g., "ec2_instance", "storage_bucket", "kubernetes_cluster", "serverless_function")
 - "resource_name": (the desired name for the primary resource, e.g., bucket name, instance name)
 - "region": (the desired cloud region, e.g., "us-east-1", "East US", "europe-west1")
+- "secret_references": (Optional. List of objects, where each object describes a secret to be fetched from a secret manager. Each object should have:
+    - "secret_id": (string, Required. The name or ARN of the secret in AWS Secrets Manager. E.g., "prod/myapp/db_password").
+    - "target_usage_identifier": (string, Required. A platform-defined key indicating how the secret will be used, e.g., "DB_PASSWORD_FOR_EC2_USER_DATA", "API_KEY_FOR_APP_ENV_VAR").
+    - "secret_value_json_key": (string, Optional. If the secret is a JSON, the key within that JSON to get the actual value, e.g., "password").
+    - "target_resource_name": (string, Optional. The name of the resource that needs this secret, e.g., "my_app_server_instance").
+  )
 - "required_security_scans": (list of strings, e.g., ["sast", "dast", "sca"])
 - "other_requirements": (any other specific user requests or details)
 
@@ -102,6 +108,7 @@ Expected JSON Output:
   "resource_type": "nodejs_express_api", 
   "resource_name": "my-node-app", 
   "region": "West US",
+  "secret_references": [],
   "required_security_scans": ["sast", "dast"],
   "other_requirements": "None"
 }
@@ -116,6 +123,7 @@ Expected JSON Output:
   "resource_type": "storage_bucket",
   "resource_name": "my-photo-storage-bucket",
   "region": "us-east-1",
+  "secret_references": [],
   "required_security_scans": [],
   "other_requirements": "None"
 }
@@ -130,6 +138,7 @@ Expected JSON Output:
   "resource_type": "storage_bucket", 
   "resource_name": "my-azure-backup-data",
   "region": "East US",
+  "secret_references": [],
   "required_security_scans": [],
   "other_requirements": "None"
 }
@@ -144,8 +153,37 @@ Expected JSON Output:
   "resource_type": "storage_bucket",
   "resource_name": "gcp-project-artifacts",
   "region": "us-central1",
+  "secret_references": [],
   "required_security_scans": [],
   "other_requirements": "None"
+}
+
+User Request: "Deploy my Python app 'user-auth-service' as an EC2 instance on AWS in us-west-2. It needs a database password for setup, which is stored in AWS Secrets Manager as 'prod/user-auth/db_pass'. The secret is a JSON, use the key 'password'. Also, it requires an API key for an external service, get this from secret 'shared/external_api/key', and use this for an environment variable named 'EXTERNAL_API_KEY'."
+Expected JSON Output:
+{
+  "application_type": "python_app", 
+  "programming_language": "python",
+  "database_type": "none", // Assuming not specified beyond the password need
+  "cloud_provider": "aws",
+  "resource_type": "ec2_instance", 
+  "resource_name": "user-auth-service",
+  "region": "us-west-2",
+  "secret_references": [
+    {
+      "secret_id": "prod/user-auth/db_pass",
+      "target_usage_identifier": "DB_PASSWORD_FOR_EC2_USER_DATA", 
+      "secret_value_json_key": "password",
+      "target_resource_name": "user-auth-service"
+    },
+    {
+      "secret_id": "shared/external_api/key",
+      "target_usage_identifier": "ENV_VAR_FOR_EC2", 
+      "secret_value_json_key": null, 
+      "target_resource_name": "user-auth-service" 
+    }
+  ],
+  "required_security_scans": [],
+  "other_requirements": "Needs database password for setup and an API key for an external service."
 }
 
 Now, parse the following user request:
@@ -236,6 +274,7 @@ The primary method for intent recognition and entity extraction will be through 
     *   This prompt instructs the LLM to act as an expert system, identify predefined categories of information, and return them in a structured JSON format.
 
 3.  **Key Entities to Extract (MVP Focus):**
+    The following entities are targeted for extraction from the user's natural language input. This list directly informs the structure of the `ParsedIntentInput` Pydantic model used by the AI Orchestration layer in the backend.
     *   **Core Application Details:**
         *   `application_type`: (e.g., "python_flask_webapp", "nodejs_express_api", "static_website", "java_spring_service", "none")
         *   `programming_language`: (e.g., "python", "javascript", "java", "go", "none")
@@ -246,6 +285,12 @@ The primary method for intent recognition and entity extraction will be through 
         *   `resource_type`: (e.g., "ec2_instance", "storage_bucket", "application_deployment")
         *   `resource_name`: (The user-specified or inferred name for the resource)
         *   `region`: (The target cloud region, e.g., "us-east-1", "East US", "europe-west1")
+    *   **Secret References:**
+        *   `secret_references`: `Optional[List[Object]]`. An array of objects, where each object details a secret to be fetched (primarily from AWS Secrets Manager for MVP). This structure directly informs the `secret_references` field in the `ParsedIntentInput` Pydantic model. Each object in the list should conform to the following structure:
+            *   `secret_id`: `string` (Required. The name or ARN of the secret in AWS Secrets Manager, e.g., "prod/myapp/db_password").
+            *   `target_usage_identifier`: `string` (Required. A platform-defined key indicating how the secret will be used, e.g., "DB_PASSWORD_FOR_EC2_USER_DATA", "API_KEY_FOR_APP_ENV_VAR").
+            *   `secret_value_json_key`: `string` (Optional. If the secret stored in AWS Secrets Manager is a JSON string, this specifies the key within that JSON to retrieve the actual secret value, e.g., "password").
+            *   `target_resource_name`: `string` (Optional. The name of the specific resource being deployed that requires this secret, e.g., the value of `resource_name` if the secret applies to the primary resource).
     *   **Security Requirements:**
         *   `required_security_scans`: (List of scan types, e.g., ["sast", "dast", "sca"])
     *   **Other Specifics:**
